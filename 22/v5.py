@@ -1218,6 +1218,17 @@ class Utils:
                     result["total_tests"] = int(match.group(1))
                     break
         
+        # Pattern 2: Parse individual test result lines (only if no summary found)
+        # Look for lines with test status at the end (but not in file paths)
+        # Supported patterns:
+        #   - pytest: "test_file.py::test_name PASSED [ 50%]"
+        #   - unittest dot notation: "..F.E.."
+        #   - mocha: "  ✓ test name" or "  1) test name"
+        #   - go test: "--- FAIL: TestName"
+        #   - rust: "test test_name ... ok/FAILED"
+        #   - TAP: "ok 1 - test description" or "not ok 1 - test description"
+        #   - generic ok: "test_name ... ok" or "test_name ok"
+        
         counted_in_summary = result["passed"] > 0 or result["failed"] > 0
         
         for line in lines:
@@ -1884,15 +1895,14 @@ class BaseSolver:
                 resp = error
             elif json_obj:
                 try:
-                    # Parse the JSON string returned by parse_response
-                    parsed_obj = json.loads(json_obj)
-                    logger.info(f"Step {step_number} | Tool: {parsed_obj.get('name')} | Time: {elapsed_time:.2f}s")
-                    tool_name = str(parsed_obj.get("name", ""))
+                    json_obj = json.loads(json_obj)
+                    logger.info(f"Step {step_number} | Tool: {json_obj.get('name')} | Time: {elapsed_time:.2f}s")
+                    tool_name = str(json_obj.get("name", ""))
                     tool = self.tool_manager.get_tool(tool_name)
                     if tool is None:
-                        resp = f"Error: {parsed_obj.get('name')} tool not found"
+                        resp = f"Error: {json_obj.get('name')} tool not found"
                     else:
-                        resp = tool.run(tool_input=parsed_obj.get("arguments"))
+                        resp = tool.run(tool_input=json_obj.get("arguments"))
                 except Exception as e:
                     logger.error(f"Error calling tool: {e}")
                     resp = f"Error: {e}"
@@ -1975,7 +1985,7 @@ class CreateProblemSolver(BaseSolver):
     
     RESPONSE_FORMAT_JSON="""Return only the final python files code in JSON format.
     Response Examples:
-    [{"file_name":"a.py","code":"contents of a.py"},{"file_name":"b.py","code":"contents of b.py"}]
+    [{"file_name":"a.py","code":"contents of a.py"},{"file_name":"b.py","content":"contents of b.py"}]
     """
     
     RESPONSE_FORMAT_SOLUTION_EVAL_2=textwrap.dedent("""
@@ -2234,12 +2244,8 @@ class CreateProblemSolver(BaseSolver):
         self.problem_statement = self.post_process_instruction()
         self.code_skeleton = self.get_code_skeleton()
 
-        # Format the system prompt properly to avoid double-formatting issues
-        system_prompt = CreateProblemSolver.SYSTEM_PROMPT_INITIAL_SOLUTION_EVAL.replace("{format_prompt}", self.RESPONSE_FORMAT_SOLUTION_EVAL_2)
-        system_prompt = system_prompt.format(tools_docs=tool_manager.get_tool_docs())
-        
         self.agent_initial_solution_eval=CustomAssistantAgent(
-            system_message=system_prompt,
+            system_message=CreateProblemSolver.SYSTEM_PROMPT_INITIAL_SOLUTION_EVAL.format(tools_docs=tool_manager.get_tool_docs(), format_prompt=self.RESPONSE_FORMAT_SOLUTION_EVAL_2),
             model_name=GLM_MODEL_NAME
         )
         
@@ -2860,7 +2866,8 @@ class BugFixSolver(BaseSolver):
     - Check existing test files to identify framework patterns and imports
     - Try native test commands first by examining project structure and existing test patterns
     - **ONLY use standalone scripts if native framework fails due to dependency issues**
-    - Find all test files and run the FULL existing test suite using the discovered native framework if available
+    - Run the FULL existing test suite using the discovered native framework
+    - Include your new test script in the run
     - ALL tests must pass (existing + your new test)
     - If ANY test fails → analyze why and refine fix
     - Iterate Steps 6→7→8→9 until ALL tests pass
@@ -2966,7 +2973,7 @@ class BugFixSolver(BaseSolver):
         Success criteria: Test script created and follows existing patterns
         I've successfully created a test script that reproduces the bug. The script follows the existing test patterns and covers all scenarios from the problem statement. Ready to save this progress.
         ===================TOOL_CALL
-        {{"name":"save_context","arguments":{{"step_number":2,"step_name":"Create Test Script","summary":"Created test_issue.py with comprehensive test cases","findings":"Found existing test patterns use unittest framework with specific naming conventions and test command is example_command","next_steps":"Verify test completeness and run the test to confirm it fails"}}}}
+        {{"name":"save_context","arguments":{{"step_number":2,"step_name":"Create Test Script","summary":"Created test_issue.py with comprehensive test cases","findings":"Found existing test patterns use unittest framework with specific naming conventions","next_steps":"Verify test completeness and run the test to confirm it fails"}}}}
         
         **5. ❌ INVALID RESPONSE EXAMPLES (DO NOT DO THIS):**
         
@@ -3436,26 +3443,12 @@ class ToolManager:
     def __init__(self):
         """Initialize the tool manager."""
         self._tools: Dict[str, ToolManager.LLMTool] = {}
-        self._register_default_tools()
         self.temp_files: List[str] = []
         self.saved_context: List[dict] = []
 
     def add_temp_file(self, file_path: str):
         self.temp_files.append(file_path)
-    
-    def _register_default_tools(self):
-        """Register all default tools."""
-        # Register BashTool
-        self.register_tool(ToolManager.BashTool(tool_manager=self))
-        # Register CompleteTool
-        self.register_tool(ToolManager.CompleteTool())
-        # Register SaveContextTool
-        self.register_tool(ToolManager.SaveContextTool(tool_manager=self))
-        # Register SequentialThinkingTool
-        self.register_tool(ToolManager.SequentialThinkingTool(tool_manager=self))
-        # Register StrReplaceEditorTool
-        self.register_tool(ToolManager.StrReplaceEditorTool(tool_manager=self))
-    
+
     def register_tool(self, tool: 'LLMTool'):
         self._tools[tool.name] = tool
     
@@ -4892,8 +4885,31 @@ class CreateTaskToolManager(ToolManager):
         self.register_tool(ToolManager.RunPythonFileTool(tool_manager=self))
         self.register_tool(ToolManager.SearchInFileTool(tool_manager=self))
         self.register_tool(ToolManager.CompleteTool(tool_manager=self))
-        # Register save_context tool for consistency
+
+class FixTaskToolManager(ToolManager):
+    """Tool manager specifically for CREATE tasks with miner-261 tools."""
+    
+    def __init__(self):
+        """Initialize CreateTaskToolManager with CREATE-specific tools."""
+        # Call parent init but don't register default tools yet
+        super().__init__()
+        # Clear default tools
+        self._tools.clear()
+        # Register CREATE-specific tools
+        self._register_fix_tools()
+    
+    def _register_fix_tools(self):
+        """Register all default tools."""
+        # Register BashTool
+        self.register_tool(ToolManager.BashTool(tool_manager=self))
+        # Register CompleteTool
+        self.register_tool(ToolManager.CompleteTool())
+        # Register SaveContextTool
         self.register_tool(ToolManager.SaveContextTool(tool_manager=self))
+        # Register SequentialThinkingTool
+        self.register_tool(ToolManager.SequentialThinkingTool(tool_manager=self))
+        # Register StrReplaceEditorTool
+        self.register_tool(ToolManager.StrReplaceEditorTool(tool_manager=self))
 
 class ProblemTypeClassifier:
     
@@ -5039,7 +5055,7 @@ def agent_main(input_dict: Dict[str, Any], repo_dir: str = "repo"):
     
     if problem_type == ProblemTypeClassifier.PROBLEM_TYPE_FIX:
         # Use ToolManager with BugFix tools for FIX tasks
-        tool_manager = ToolManager()
+        tool_manager = FixTaskToolManager()
         fix_prb_task = BugFixSolver(problem_statement, tool_manager).solve_problem()
         try:
             result = asyncio.run(asyncio.wait_for(fix_prb_task, timeout=2280))
@@ -5051,7 +5067,6 @@ def agent_main(input_dict: Dict[str, Any], repo_dir: str = "repo"):
             result = Utils.create_final_git_patch(tool_manager.temp_files)
             
     else:
-        # Use CreateTaskToolManager with CREATE-specific tools for CREATE tasks
         tool_manager = CreateTaskToolManager()
         create_problem_task = CreateProblemSolver(problem_statement, tool_manager).solve_problem()
         try:
