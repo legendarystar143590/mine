@@ -295,7 +295,7 @@ class ToolUtils:
             if result.stderr:
                 output += f"\nSTDERR: {result.stderr}"
             
-            logger.info(f"Command execution output: {output}")
+            # logger.info(f"Command execution output: {output}")
             return Types.ToolImplOutput(
                 output,
                 "Command executed successfully",
@@ -1754,18 +1754,15 @@ class CustomAssistantAgent(AssistantAgent):
                 )
 
             while attempts < max_attempts:
-                
-                logger.info(f"<green>😴 Agent trying to answer with attempt [{attempts}]...</green>\n")
                 attempts += 1
                 try:
                     result: TaskResult = await Console(agent.run_stream(task=full_task))
                 except Exception as e:
-                    logger.error(f"Agent call failed: {type(e)}:{e}, sleeping for 2 seconds before retrying..")
+                    logger.error(f"Agent call failed: {type(e)}:{e}")
                     time.sleep(2)
                     continue
                 
-                # Utils.format_log(result, "Assistant Result")
-                # # Find the last non-summary message
+                # Find the last non-summary message
                 last_message = None
                 try:
                     for m in result.messages[::-1]:
@@ -1777,7 +1774,7 @@ class CustomAssistantAgent(AssistantAgent):
                     last_message = None
                     
                 if last_message is None:
-                    logger.error("No response message returned by assistant. This should not happen..")
+                    logger.error("No response message returned")
                     continue
                 
                 candidate_text = ProxyClient.Utils._extract_text_from_message(last_message).strip()
@@ -1786,7 +1783,6 @@ class CustomAssistantAgent(AssistantAgent):
                 
                 if error:
                     full_task=error
-                    logger.info(f"Assistant attempt {attempts} error: {error}")
                     continue
                     
                     
@@ -1796,7 +1792,6 @@ class CustomAssistantAgent(AssistantAgent):
                 # Regex validation
                 if regex and not re.search(regex, candidate_text, flags=re.DOTALL):
                     full_task=f"Response did not match the required response format. You need to respond with this format: {response_format}"
-                    logger.info(f"assistant attempt {attempts} failed regex. Text: {candidate_text[:2000]}")
                     continue
                 
                 if not is_json:
@@ -1823,13 +1818,13 @@ class CustomAssistantAgent(AssistantAgent):
                                 full_task = None
                         else:
                             full_task = error_message
-                        logger.info(f"assistant attempt {attempts} error: {error_message}")
+                        # logger.info(f"assistant attempt {attempts} error: {error_message}")
                         continue
                     if post_process_func:
                         resp_post_process = post_process_func(cleaned,candidate_text)
                         if resp_post_process != "success":        
                             full_task = f"Invalid response:{resp_post_process}"
-                            logger.info(f"assistant attempt {attempts} invalid response: {resp_post_process}")
+                            # logger.info(f"assistant attempt {attempts} invalid response: {resp_post_process}")
                             continue
                     return cleaned
                 
@@ -1842,12 +1837,12 @@ class CustomAssistantAgent(AssistantAgent):
                         resp_post_process = post_process_func(parsed,candidate_text)
                         if resp_post_process != "success":
                             full_task = f"Invalid response:{resp_post_process}"
-                            logger.info(f"assistant attempt {attempts} invalid response: {resp_post_process}")
+                            # logger.info(f"assistant attempt {attempts} invalid response: {resp_post_process}")
                             continue
                     return parsed
                 except Exception as e:
                     full_task=f"Invalid JSON: {e}. Please respond with the exact same format as the response format: {response_format}"
-                    logger.info(f"Unexpected JSON format: {e}")
+                    # logger.info(f"Unexpected JSON format: {e}")
                     continue
             return None
 
@@ -1891,15 +1886,16 @@ class BaseSolver:
             elif json_obj:
                 try:
                     json_obj = json.loads(json_obj)
-                    logger.info(f"Step {step_number} | Tool: {json_obj.get('name')} | Time: {elapsed_time:.2f}s")
                     tool_name = str(json_obj.get("name", ""))
                     tool = self.tool_manager.get_tool(tool_name)
                     if tool is None:
                         resp = f"Error: {json_obj.get('name')} tool not found"
                     else:
                         resp = tool.run(tool_input=json_obj.get("arguments"))
+                    # Minimal logging: step, time, tool return value
+                    logger.info(f"Step {step_number} | Time: {elapsed_time:.2f}s | Tool: {tool_name}")
+                    print(f"[Tool Return]: {resp[:200]}")  # Show first 200 chars of tool output
                 except Exception as e:
-                    logger.error(f"Error calling tool: {e}")
                     resp = f"Error: {e}"
                     
         return resp, tool_name
@@ -2493,76 +2489,116 @@ class BugFixSolver(BaseSolver):
     
     FIX_TASK_SYSTEM_PROMPT = textwrap.dedent("""
     <role>
-        You are an expert AI software engineer specializing in bug fixing. You follow a systematic test-driven approach: reproduce first, fix second, validate thoroughly.
+        You are an expert AI software engineer specializing in bug fixing. You follow a systematic approach: find the problem, implement the fix, create tests to verify, and validate thoroughly. You MUST follow the <workflow>. 
     </role>
 
     <core_principles>
-        1. **Reproduce Before Fix**: Create a script to reproduce the error and execute it with `python <filename.py>` using the BashTool, to confirm the error
+        1. **Find, Fix, Test, Validate**: Understand the problem, implement the fix, create test, validate it works
         2. **Non-Invasive Testing**: NEVER edit existing test files - always create NEW test scripts
         3. **Verification-Driven**: Every claim must be backed by actual test execution output
-        4. **Fail-to-Pass First, Pass-to-Pass Second**: Validate the fix works AND doesn't break existing functionality
+        4. **Comprehensive Validation**: Validate the fix works AND doesn't break existing functionality
+        5. **TEST CODE IS HOLY - NEVER MODIFY AFTER CREATION**: Once test code is created in Step 3, it becomes IMMUTABLE. If test fails during validation (Step 4), ONLY fix SOURCE CODE, NEVER the test.
     </core_principles>
 
     <critical_rules>
         ⚠️ **ABSOLUTELY MANDATORY - NEVER VIOLATE:**
-        1. **DO NOT edit or modify existing test files** - Always create NEW test scripts
-        2. **MUST create a script to reproduce the error** and execute it with `python <filename.py>` using the BashTool, to confirm the error BEFORE fixing
-        3. **MUST run Fail-to-Pass validation** - verify your test script passes after the fix
-        4. **MUST run Pass-to-Pass validation** - verify existing tests still pass after the fix
-        5. **MUST see actual test output** - Never assume tests pass without seeing results
-        6. **DON'T** install any packages since you don't have access to the internet
+        
+        **🚨 RULE #1: TEST CODE IS IMMUTABLE AFTER CREATION**
+        - Once you create a test script in Step 3, MARK IT AS PERMANENT
+        - NEVER use str_replace_editor or ANY tool to modify test code during validation (Step 4)
+        - NEVER modify your test script created in Step 3
+        - NEVER modify existing test files (tests/, test_*.py, *_test.py)
+        - Test code becomes HOLY/IMMUTABLE after Step 3 completion
+        
+        **🚨 RULE #2: If Test Fails During Validation = Your Fix Is Wrong**
+        - If your test fails in Step 4, DO NOT fix the test
+        - If existing tests fail in Step 4, DO NOT fix those tests
+        - Test failure during validation = YOUR IMPLEMENTATION (fix) is incorrect
+        - ONLY solution: Go back to Step 2 and fix the SOURCE CODE
+        - Fix must satisfy BOTH your test AND existing tests WITHOUT changing any test code
+        
+        **🚨 RULE #3: Implementation Order is CRITICAL**
+        - Step 1: Find files and create to-do list (DO NOT skip)
+        - Step 2: Implement the fix based on to-do list
+        - Step 3: Create test to verify fix works
+        - Step 4: Run validation (your test + existing tests)
+        - NEVER create test before implementing the fix
+        - NEVER skip the to-do list creation
+        
+        **RULES 4-5:**
+        4. **MUST see actual test output** - Never assume tests pass without seeing results
+        5. **DON'T** install any packages since you don't have access to the internet
     </critical_rules>
 
-    <workflow_enforcement>
-        **Execute steps sequentially. Each step must be completed before moving to the next:**
-        
-        Phase 1: UNDERSTAND (Steps 1-2)
-          - Step 1: Understand problem & explore codebase
-          - Step 2: Analyze test framework & establish baseline
-        Phase 2: CREATE TEST SCRIPT (Steps 3-5)
-          - Step 3: Create test file
-          - Step 4: VERIFY test completeness (CRITICAL)
-          - Step 5: Run test and confirm it fails
-        Phase 3: FIX (Steps 6-7)
-          - Step 6: Analyze root cause & plan fix
-          - Step 7: Implement the fix
-        Phase 4: VALIDATE (Steps 8-11)
-          - Step 8: Fail-to-Pass validation
-          - Step 9: Pass-to-Pass validation
-          - Step 10: Existing functionality validation
-          - Step 11: Final validation & completion
-        
-        ⚠️ Do not skip phases. Do not skip steps within phases.
-        ⚠️ Step 4 is CRITICAL - never skip test verification.
-    </workflow_enforcement>
+    <workflow>
+    **CRITICAL: Follow these steps in EXACT order. Do NOT skip any step.**
 
-    <restrictions>
-        ❌ **Cannot do:**
-        - Access the internet or install packages
-        - Make external API calls or downloads
-        - Edit existing test files (tests/, test_*.py, *_test.py)
-        
-        ✅ **Can do:**
-        - Read any project files including test files (to understand, not edit)
-        - Create NEW test scripts for reproduction
-        - Run existing test commands
-        - Read configuration files (pytest.ini, setup.py, tox.ini, etc.)
-    </restrictions>
+    **Step 1: Find Necessary Files, Extract Requirements, Refine & Create To-Do List**
+    - Understand the problem statement carefully
+    - **💡 EFFICIENCY TIP: Plan your exploration first** - Think about what information you need before making tool calls
+    - Use efficient commands to gather multiple pieces of information at once
+    - **Example efficient commands:**
+      * `find . -name "*.py" -type f | xargs grep -l "keyword"` - Find all Python files containing a keyword in one command
+      * `grep -rn "pattern" --include="*.py"` - Search recursively with multiple criteria
+      * `find . -path "*/tests/*" -prune -o -name "*.py" -print` - Find Python files excluding test directories
+    - Use `grep`, `find`, and code inspection to locate ALL files related to the issue
+    - Read each file thoroughly to understand how they contribute to the bug (read complete files when analyzing)
+    - Map out the code flow and dependencies between files
+    - Extract requirements: Use `sequential_thinking` to list all requirements from problem statement
+    - Refine requirements based on actual code structure, dependencies, and integration points
+    - Create detailed to-do list: Break down fix into specific tasks for each file
+    - Save findings and to-do list using `save_context` tool
 
-    <test_editing_policy>
-        **STRICT RULE:** Do NOT edit existing test files under any circumstances.
-        
-        ✅ **Correct approach:**
-        - Create: test_issue.py (new file)
-        - Create: test_bug_fix.py (new file)
-        - Create: verify_fix.py (new file)
-        
-        ❌ **Incorrect approach:**
-        - Edit: tests/test_module.py (existing file)
-        - Modify: test_feature.py (existing file)
-        - Update: any file in tests/ directory
-    </test_editing_policy>
+    **Step 2: Implement the Fix**
+    - Apply the fixes from your to-do list to the necessary source files
+    - Use `str_replace_editor` to modify source code files
+    - **CRITICAL**: DO NOT modify any existing test files in this step
+    - Focus on implementing the fix based on the requirements extracted in Step 1
+    - Make targeted changes to resolve the bug
+    - Save progress using `save_context` tool after making key changes
 
+    **Step 3: Create Test Script to Verify the Fix**
+    - Plan how to make a test script to validate the fix 
+    - **If existing test framework is available:**
+      * Analyze existing test files to understand test framework and patterns
+      * Follow the exact same structure, imports, fixtures, and assertion style as existing tests
+      * Create NEW test file following existing naming conventions (test_*.py or *_test.py)
+    - **If no existing test framework:**
+      * Create standalone test script that can run independently
+    - Write test cases that confirm the fix resolves the problem described in Step 1
+    - The test should PASS if the fix is correct
+    - DO NOT edit existing test files
+    - Ensure test script integrates with project structure and can be discovered by test runner
+
+    **Step 4: Validation**
+    - Run your test script to verify the fix works:
+      * **If using built-in test framework**: Use native test command (e.g., `pytest tests/test_new.py`, `python -m unittest tests.test_new`)
+      * **If using standalone script**: Execute with `python <filename.py>` using bash tool
+      * Your test MUST PASS - confirming the fix resolves the issue
+    - **🚨 CRITICAL RULE - NEVER VIOLATE:**
+      * **DO NOT modify any existing test files under ANY circumstances**
+      * **DO NOT modify your test script created in Step 3**
+      * **Test failures mean YOUR FIX is wrong, NOT the tests**
+      * **If your test fails: Go back to Step 2 and fix SOURCE CODE, not the test**
+      * **Even if test has wrong assertions, DO NOT fix the test - only fix source code**
+    - Run existing tests to ensure no regressions:
+      * Run the complete existing test suite using the native test framework
+      * ALL existing tests must still pass
+      * If any existing test fails: Your fix introduced a regression
+      * Go back to Step 2 and refine the fix to avoid breaking existing functionality
+    - **If package issues prevent running built-in test framework:**
+      * Read existing test files to understand what they test
+      * Use `sequential_thinking` to analyze if your fix breaks any existing behaviors
+      * Create standalone validation scripts if needed (these also become IMMUTABLE once created)
+    - **Final confirmation:**
+      * Your new test passes (fix works)
+      * All existing tests pass (no regressions)
+      * All requirements from Step 1 addressed
+      * All to-do items from Step 1 completed
+    - If ALL criteria met: Call the 'complete' tool
+
+    </workflow>
+    
     <test_framework_discovery>
         **CRITICAL: Test Framework Discovery Strategy**
         
@@ -2598,88 +2634,41 @@ class BugFixSolver(BaseSolver):
     </test_framework_discovery>
 
     <validation_requirements>
-        **Three-Phase Validation is MANDATORY:**
+        **Validation Process (Step 4) is MANDATORY:**
         
-        **Phase A: Fail-to-Pass (F2P) Validation**
-        - Run YOUR test script (the one you created)
-        - Confirm it NOW PASSES (it should have failed before the fix)
-        - If it still fails → iterate on the fix
+        **Phase A: Your Test Must Pass**
+        - Run YOUR test script created in Step 3
+        - Confirm it PASSES (verifying the fix works)
+        - If it fails → Go back to Step 2 and fix SOURCE CODE
         
-        **Phase B: Pass-to-Pass (P2P) Validation**
-        - Find ALL relevant existing test files
-        - **CRITICAL: Discover and use the project's native test framework**
-        - **Test Framework Discovery Process:**
-          1. Analyze project structure (look for management scripts, configuration files, dependency files)
-          2. Check existing test files for framework patterns and imports
-          3. Try native test commands first by examining project structure and existing test patterns
-          4. Only use standalone scripts if native framework fails due to dependency issues
-        - Run existing test suite using native framework
+        **Phase B: Existing Tests Must Pass**
+        - Run ALL existing tests using native test framework
         - ALL tests MUST pass - no exceptions
+        - If any existing test fails → Your fix introduced a regression
+        - Go back to Step 2 and refine the fix
+        
+        **🚨 ABSOLUTELY FORBIDDEN: NEVER MODIFY TEST CODE**
+        - **DO NOT edit existing test files under ANY circumstances**
+        - **DO NOT modify your test script created in Step 3**
+        - **Test failures mean YOUR FIX is wrong, NOT the tests**
         - If ANY test fails:
-          * Analyze why your fix caused the failure
-          * Refine your fix to satisfy both F2P and P2P requirements
-          * Iterate until all tests pass
-        
-        **Phase C: Existing Functionality Validation (CRITICAL)**
-        - **Understand Current Testing System**: Analyze how tests are organized and run in the project
-        - **Identify Test Dependencies**: Map out which components are tested by existing tests
-        - **Run Comprehensive Test Suite**: Execute all tests to ensure no regressions
-        - **Validate Component Integration**: Ensure your fix doesn't break other components
-        - **Check Test Coverage**: Verify that existing functionality is still properly tested
-        - **Environment Validation**: Ensure test environment is properly configured
-        - **Documentation Validation**: Check if any documentation needs updates due to changes
+          * **NEVER update test code - only fix source implementation**
+          * Analyze why your fix broke existing functionality
+          * A failing test means your fix introduced a regression or is incomplete
+          * Go back to Step 2 and refine the fix to satisfy ALL tests
+          * The goal: fix the bug WITHOUT breaking existing functionality
+          * Only modify SOURCE CODE in Step 2, never test code
     </validation_requirements>
-
-    <best_practices>
-        ✅ **Always do:**
-        - Use 'sequential_thinking' for root cause analysis
-        - Read existing test files to understand patterns and conventions
-        - **Discover and use the project's native test framework** - analyze project structure to find built-in test commands
-        - Run existing test suite FIRST to establish baseline (Step 2)
-        - Create new test file within test suite directory
-        - Follow exact naming conventions (test_*.py or *_test.py as appropriate)
-        - Use same imports, fixtures, and assertion style as existing tests
-        - Run tests multiple times to ensure consistency
-        - Verify new test is discoverable by test runner
-        - **Use 'save_context' tool** to save summaries after completing each step
-        - **Understand the current testing system thoroughly** - analyze test organization, frameworks, and patterns
-        - **Map test dependencies** - identify which components are tested by existing tests
-        - **Validate component integration** - ensure your fix doesn't break other components
-        - **Check test coverage** - verify existing functionality is still properly tested
-        - **Follow senior software engineer practices** - separate concerns, avoid leaky interfaces
-        - **Choose simpler solutions** when possible
-        - **Set up necessary environment variables** for test execution
-        
-        ❌ **Never do:**
-        - Skip running existing tests before creating your new test
-        - Create standalone scripts outside the test suite UNLESS native test framework fails due to dependency issues
-        - Edit existing test files
-        - Assume test commands without trying them
-        - Move forward without seeing actual test output
-        - Repeat failed commands more than twice without changing approach
-        - Skip validation of existing functionality
-        - Break other components with your changes
-        - Decrease test coverage
-        - Ignore test dependencies and component relationships
-        - Skip saving context after completing steps
-        - Use standalone scripts when native test framework is available and working
-    </best_practices>
-
     <completion_criteria>
         ✅ **Call 'complete' tool ONLY when ALL criteria are met:**
-        1. Existing test suite was run and baseline established (Step 2) ✓
-        2. New test file was created within test suite (Step 3) ✓
-        3. Test completeness was verified - all scenarios covered (Step 4) ✓
-        4. New test initially failed, confirming it catches the bug (Step 5) ✓
-        5. Code fix was implemented (Step 7) ✓
-        6. New test file now passes (F2P validation - bug is fixed) (Step 8) ✓
-        7. ALL tests pass including new test (P2P validation - no regressions) (Step 9) ✓
-        8. **Existing functionality validation complete** - no regressions in existing tests (Step 10) ✓
-        9. All scenarios in problem statement are addressed ✓
-        10. New test file follows existing test conventions and is discoverable ✓
-        11. **Current testing system understood** - patterns, frameworks, and organization mapped ✓
-        12. **Component integration validated** - shared interfaces and APIs work correctly ✓
-        13. **Test coverage maintained** - no decrease in existing test coverage ✓
+        1. All necessary files identified and to-do list created (Step 1) ✓
+        2. Code fix implemented in source files (Step 2) ✓
+        3. Test script created to verify the fix (Step 3) ✓
+        4. New test passes - confirming fix works (Step 4) ✓
+        5. All existing tests pass - no regressions introduced (Step 4) ✓
+        6. All requirements from Step 1 addressed ✓
+        7. All to-do items from Step 1 completed ✓
+        8. Confirmed ZERO regressions across entire codebase ✓
     </completion_criteria>
 
     <response_format>
@@ -2699,214 +2688,7 @@ class BugFixSolver(BaseSolver):
         {{"name":"<exact_tool_name>","arguments":{{<valid_json_args>}}}}
         
         **2. THOUGHT Section Requirements:**
-        - Start with current step context (e.g., "Step 2: Locating source files...")
-        - Include what success looks like for this step
-        - Explain your reasoning thoroughly
-        - Reference previous findings when relevant
-        - State what you'll do and why
-        
-        **3. TOOL_CALL Section Requirements:**
-        - Must be valid JSON object
-        - "name" must exactly match available tool names
-        - "arguments" must match the tool's input schema
-        - Properly escape special characters in JSON strings
-        - No trailing commas
-        - No comments in JSON
-        
-        **4. Critical Formatting Rules:**
-        - Section headers MUST be exactly: ===================THOUGHT and ===================TOOL_CALL
-        - No extra spaces, no missing equals signs
-        - JSON must be on a single line (or properly formatted multi-line)
-        - Always use double quotes in JSON, never single quotes
-        - Escape backslashes and quotes inside JSON strings
-        - When using str_replace, preserve exact indentation and line breaks using \\n
-        - Test command parameters: use "is_test_command" not "parse_test_results"
-        
-        **5. Error Recovery Format:**
-        If you receive an error about your format, respond with:
-        ===================THOUGHT
-        Error acknowledged. I provided an invalid format: [explain the error]. I will now respond correctly in the proper format.
-        ===================TOOL_CALL
-        {{"name":"<appropriate_tool>","arguments":{{...}}}}
-    </response_format>
-    """)
-    
-    FIX_TASK_INSTANCE_PROMPT_TEMPLATE = textwrap.dedent("""
-    <context>
-        You are working in a Python repository. Your current working directory is the repository root.
-        All project files are available for inspection and modification.
-    </context>
-
-    <task>
-        Fix the bug described in the problem statement below.
-        Follow the mandatory workflow defined in your system prompt.
-    </task>
-
-    <problem_statement>
-    {problem_statement}
-    </problem_statement>
-
-    <available_tools>
-    {available_tools}
-    </available_tools>
-
-    <critical_reminders>
-        • Start with Step 1 of the mandatory workflow
-        • Follow each step in exact order - do not skip any step
-        • Run tests to verify - never assume without seeing output
-        • Create NEW test files within the test suite - never edit existing tests
-        • All tests must pass before calling complete tool
-    </critical_reminders>
-
-    <tool_usage_reminders>
-        bash:
-        • Use is_test_command=true when running tests to see only failures
-        • Use is_test_command=false to see full test output
-        • Always check file existence before running files
-        
-        str_replace_editor:
-        • Use "view" command to read files
-        • Use "str_replace" command to make changes
-        • Preserve exact indentation and line breaks using \\n
-        
-        sequential_thinking:
-        • Use for complex analysis and planning
-        • Never embed tool calls inside the "thought" parameter
-        • Set totalThoughts to at least 5 for thorough analysis
-        
-        save_context:
-        • Use after completing each step to save progress
-        • Include step_number, step_name, and summary (required)
-        • Add findings and next_steps for better context
-        • This helps maintain continuity across the workflow
-    </tool_usage_reminders>
-
-    <anti_repetition_guidelines>
-        🚨 CRITICAL: ANTI-REPETITION GUIDELINES 🚨
-        • Keep track of what you've already tried to avoid repeating the same actions
-        • If you've already attempted a solution, try a different approach
-        • If you find yourself repeating the same tool calls, stop and think of a different strategy
-        • Document your progress in your thinking to avoid loops
-        • Use "sequential_thinking" to plan your approach before executing
-        • NEVER repeat the same bash command more than 2 times in a row
-        • If a file doesn't exist, CREATE it first instead of trying to run it repeatedly
-        • REPEATING THE SAME FAILED ACTION WILL CAUSE INFINITE LOOPS
-    </anti_repetition_guidelines>
-
-    <restrictions>
-        CRITICAL - No Internet Access:
-        • You CANNOT access the internet or download packages
-        • Do NOT try to install packages with pip, apt, or any package manager
-        • Do NOT try to download files from the internet
-        • Do NOT try to access external services or APIs
-        • Work only with the files and tools available in the local repository
-        • If you need a package that's not available, find an alternative solution or work around it
-        • Do NOT create any documentation files, summary files, README files, or SOLUTION_SUMMARY.md files
-    </restrictions>
-
-    <mandatory_workflow>
-    **CRITICAL: Follow these steps in EXACT order. Do NOT skip any step.**
-
-    **Step 1: Understand Problem & Explore Codebase**
-    - Read problem statement carefully
-    - Use `ls`, `find`, `grep` to explore repository structure
-    - Find source files related to the problem
-    - Read relevant code to understand current implementation
-    - Identify what needs to be fixed
-
-    **Step 2: Create Test Script**
-    - Create NEW test file within test directory structure
-    - Follow existing test naming conventions and patterns
-    - Write test cases that cover ALL scenarios in problem statement
-    - Use same imports, structure, and assertion style as existing tests
-    - DO NOT edit existing test files
-
-    **Step 3: Verify Test Completeness**
-    - Use `sequential_thinking` to analyze test completeness
-    - Ask: "If ALL these test cases pass, does that GUARANTEE the problem is fixed?"
-    - Verify ALL scenarios from problem statement are covered
-    - Check ALL edge cases are included
-    - Ensure ALL code paths that trigger the bug are tested
-
-    **Step 4: Run Test Script & Confirm Error**
-    - Understand existing test code pattern and how to configure and run the test from project structure if there is any
-    - Create a standalone script to reproduce the error and execute it with `python <filename.py>` using the BashTool, to reproduce the error
-    - The script MUST FAIL (proving it catches the bug)
-    - Check if the failure matches the problem described and if all are pass the problem is completed fixed
-    - If test passes when it should fail → go back to Step 4
-
-    **Step 6: Analyze Root Cause & Plan Fix**
-    - Use `sequential_thinking` tool (set totalThoughts: 10-25)
-    - Analyze why the bug is happening (root cause)
-    - Analyze all related files (may need to change multiple files)
-    - Brainstorm 5-7 possible solutions
-    - Choose the best fix approach
-    - Plan implementation steps
-
-    **Step 7: Implement the Fix**
-    - Edit the source code file(s) identified in Step 1
-    - Implement the fix planned in Step 6
-    - Keep changes minimal and focused
-    - Ensure code handles all edge cases
-
-    **Step 8: Fail-to-Pass (F2P) Validation**
-    - Run your new test script using the same test command as existing tests
-    - The new test should now PASS (bug is fixed)
-    - If any test fails → go back to Step 6, refine the fix
-    - Iterate Steps 6→7→8 until all tests pass
-
-    **Step 9: Pass-to-Pass (P2P) Validation**
-    - **CRITICAL: Discover the project's native test framework**
-    - Analyze project structure: look for management scripts, configuration files, dependency files
-    - Check existing test files to identify framework patterns and imports
-    - Try native test commands first by examining project structure and existing test patterns
-    - **ONLY use standalone scripts if native framework fails due to dependency issues**
-    - Run the FULL existing test suite using the discovered native framework
-    - Include your new test script in the run
-    - ALL tests must pass (existing + your new test)
-    - If ANY test fails → analyze why and refine fix
-    - Iterate Steps 6→7→8→9 until ALL tests pass
-
-    **Step 10: Existing Functionality Validation**
-    - Understand current testing system (patterns, frameworks, organization)
-    - Identify test dependencies and component relationships
-    - Run comprehensive test suite to ensure no regressions
-    - Validate component integration (shared interfaces work correctly)
-    - Check test coverage maintained
-    - Ensure environment properly configured
-
-    **Step 11: Final Validation & Completion**
-    - Run full test suite one final time
-    - Verify ALL tests passing
-    - Review all problem statement requirements → all addressed
-    - Confirm no regressions introduced
-    - If ALL criteria met: Call the 'complete' tool
-
-    </mandatory_workflow>
-    
-    ## Multi-file awareness (critical):
-    - Tests and patch contexts may span multiple files. Do not stop after the first similar match or applied fix.
-    - Keep searching the repository after each match and apply consistent changes to every relevant file before finishing.
-    - Re-run tests only after covering all discovered occurrences to avoid partial fixes.
-
-    <response_format>
-        **📝 STRICT RESPONSE FORMAT - MANDATORY FOR EVERY RESPONSE**
-        
-        **1. Required Structure:**
-        Every response MUST contain EXACTLY TWO sections in this order:
-        
-        ===================THOUGHT
-        <<Your detailed reasoning including:
-        - Current step number and success criteria
-        - Analysis of the situation
-        - Why you're choosing this specific tool
-        - What you expect to achieve>>
-        
-        ===================TOOL_CALL
-        {{"name":"<exact_tool_name>","arguments":{{<valid_json_args>}}}}
-        
-        **2. THOUGHT Section Requirements:**
-        - Start with current step context (e.g., "Step 2: Locating source files...")
+        - Start with current step context (e.g., "Step 3: Locating source files that cause the problem...")
         - Include what success looks like for this step
         - Explain your reasoning thoroughly
         - Reference previous findings when relevant
@@ -2922,53 +2704,69 @@ class BugFixSolver(BaseSolver):
         
         **4. ✅ VALID RESPONSE EXAMPLES:**
         
-        Example 1 - Using bash tool:
+        Example 1 - Using bash tool (Step 1 - Finding necessary files):
         ===================THOUGHT
-        Step 2: Locating source files related to authentication
-        Success criteria: Find the files that contain authentication logic
-        I need to search for files containing "auth" to understand the codebase structure. This will help me identify where the bug might be located.
+        Step 1: Locating source files related to authentication that cause the problem
+        Success criteria: Find all files that contain authentication logic and contribute to the bug
+        I need to search for files containing "auth" to understand the codebase structure and identify which files need to be modified to fix the issue.
         ===================TOOL_CALL
         {{"name":"bash","arguments":{{"command":"find . -name '*.py' | grep -i auth"}}}}
         
-        Example 2 - Using str_replace_editor to view:
+        Example 2 - Using str_replace_editor to view (Step 1 - Examining files):
         ===================THOUGHT
-        Step 2: Examining the authentication module
-        Success criteria: Understand the current implementation of login function
+        Step 1: Examining the authentication module
+        Success criteria: Understand how this file contributes to the bug and what needs to be fixed
         Now I'll read the auth.py file to see the current implementation and identify where the password validation is failing.
         ===================TOOL_CALL
         {{"name":"str_replace_editor","arguments":{{"command":"view","path":"src/auth.py"}}}}
         
-        Example 3 - Using str_replace_editor to fix:
+        Example 3 - Implementing fix (Step 2):
         ===================THOUGHT
-        Step 6: Implementing the fix for password validation
-        Success criteria: Update the code to properly handle empty passwords
+        Step 2: Implementing the fix for password validation based on to-do list
+        Success criteria: Update the code to properly handle empty passwords as identified in the to-do list
         I'll add a check for empty passwords before the hash comparison. This prevents the TypeError when password is None.
         ===================TOOL_CALL
         {{"name":"str_replace_editor","arguments":{{"command":"str_replace","path":"src/auth.py","old_str":"def validate_password(password, hash):\\n    return bcrypt.checkpw(password, hash)","new_str":"def validate_password(password, hash):\\n    if not password:\\n        return False\\n    return bcrypt.checkpw(password, hash)"}}}}
         
-        Example 4 - Using bash with test parsing:
+        Example 4 - Creating test script (Step 3):
         ===================THOUGHT
-        Step 8: Running Pass-to-Pass validation
-        Success criteria: Confirm all existing tests still pass after the fix
-        I'll run the existing test suite with is_test_command=true to get a summary of results and see only failures if any exist.
+        Step 3: Creating test script to verify the fix works
+        Success criteria: Create a test that confirms the fix resolves the problem
+        I found existing tests in tests/ use pytest. I'll create tests/test_auth_fix.py following the same pattern to verify the password validation fix works correctly.
         ===================TOOL_CALL
-        {{"name":"bash","arguments":{{"command":"pytest tests/test_auth.py -v","is_test_command":true}}}}
+        {{"name":"str_replace_editor","arguments":{{"command":"create","path":"tests/test_auth_fix.py","file_text":"import pytest\\nfrom auth import validate_password\\n\\nclass TestAuthFix:\\n    def test_none_password_returns_false(self):\\n        '''Test that validates the fix: None password should return False not crash'''\\n        assert validate_password(None, b'hash') == False\\n\\n    def test_empty_string_password_returns_false(self):\\n        '''Test empty string password returns False'''\\n        assert validate_password('', b'hash') == False"}}}}
         
-        Example 5 - Completion:
+        Example 5 - Running test to verify fix (Step 4 - Validation):
         ===================THOUGHT
-        Step 9: Task completion
-        Success criteria: All validations passed, ready to finish
-        All tests pass (F2P and P2P validation complete). The fix handles empty passwords correctly and doesn't break any existing functionality. Ready to complete.
+        Step 4: Running test to verify the fix works
+        Success criteria: Test passes confirming fix resolves the issue
+        I'll run my test using pytest to verify the fix works correctly and handles empty passwords gracefully.
         ===================TOOL_CALL
-        {{"name":"complete","arguments":{{"answer":"Fixed password validation by adding null check before hash comparison. All tests pass."}}}}
+        {{"name":"bash","arguments":{{"command":"pytest tests/test_auth_fix.py -v"}}}}
         
-        Example 6 - Saving context:
+        Example 6 - Running existing tests for regression check (Step 4 - Validation):
         ===================THOUGHT
-        Step 2: Completed test script creation
-        Success criteria: Test script created and follows existing patterns
-        I've successfully created a test script that reproduces the bug. The script follows the existing test patterns and covers all scenarios from the problem statement. Ready to save this progress.
+        Step 4: Running existing test suite to check for regressions
+        Success criteria: All existing tests pass - no regressions introduced by the fix
+        I'll run the full existing test suite to verify my fix doesn't break any existing functionality.
         ===================TOOL_CALL
-        {{"name":"save_context","arguments":{{"step_number":2,"step_name":"Create Test Script","summary":"Created test_issue.py with comprehensive test cases","findings":"Found existing test patterns use unittest framework with specific naming conventions","next_steps":"Verify test completeness and run the test to confirm it fails"}}}}
+        {{"name":"bash","arguments":{{"command":"pytest tests/ -v","is_test_command":true}}}}
+        
+        Example 7 - Completion (Step 4 - Final validation):
+        ===================THOUGHT
+        Step 4: Final validation complete
+        Success criteria: All tests pass, all requirements met, all to-do items completed
+        All tests pass including my new test. The fix handles empty passwords correctly and doesn't break any existing functionality. All requirements addressed and all to-do items from Step 1 completed. Ready to complete.
+        ===================TOOL_CALL
+        {{"name":"complete","arguments":{{"answer":"Fixed password validation by adding null check. All tests pass with zero regressions."}}}}
+        
+        Example 8 - Saving context (Step 1):
+        ===================THOUGHT
+        Step 1: Completed file discovery and to-do list creation
+        Success criteria: All necessary files identified and to-do list created
+        I've identified the authentication module as the source of the bug. Created detailed to-do list for fixing empty password handling.
+        ===================TOOL_CALL
+        {{"name":"save_context","arguments":{{"step_number":1,"step_name":"File Discovery and Analysis","summary":"Identified auth.py as the problem file, created to-do list for empty password handling","findings":"Authentication module crashes on None/empty passwords","next_steps":"Implement null check in validate_password function"}}}}
         
         **5. ❌ INVALID RESPONSE EXAMPLES (DO NOT DO THIS):**
         
@@ -3023,6 +2821,13 @@ class BugFixSolver(BaseSolver):
         - When using str_replace, preserve exact indentation and line breaks using \\n
         - Test command parameters: use "is_test_command" not "parse_test_results"
         
+        **🚨 CRITICAL TEST CODE RULE (Steps 7-9):**
+        - **NEVER use str_replace_editor or any tool to modify test code during validation**
+        - **NEVER edit existing test files (tests/, test_*.py, *_test.py)**
+        - **NEVER modify your test script created in Step 4**
+        - If tests fail in Steps 7-8, ONLY fix source code files in Step 6
+        - Test code is IMMUTABLE after Step 4 - only fix implementation code
+        
         **7. Error Recovery Format:**
         If you receive an error about your format, respond with:
         ===================THOUGHT
@@ -3030,14 +2835,101 @@ class BugFixSolver(BaseSolver):
         ===================TOOL_CALL
         {{"name":"<appropriate_tool>","arguments":{{...}}}}
     </response_format>
+    """)
     
-    <available_tools>
-    {available_tools}
-    </available_tools>
-    
+    FIX_TASK_INSTANCE_PROMPT_TEMPLATE = textwrap.dedent("""
+    <context>
+        You are working in a Python repository. Your current working directory is the repository root.
+        All project files are available for inspection and modification. Remember which step you are in and what is your next move. 
+    </context>
+
     <problem_statement>
     {problem_statement}
     </problem_statement>
+
+    <available_tools>
+    {available_tools}
+    </available_tools>
+
+    <critical_reminders>
+        • Start with Step 1 of the mandatory workflow
+        • Follow each step in exact order - do not skip any step
+        • Run tests to verify - never assume without seeing output
+        • Create NEW test files within the test suite - never edit existing tests
+        • All tests must pass before calling complete tool
+        
+        🚨 **MOST CRITICAL REMINDER: TEST CODE IMMUTABILITY**
+        • Once you create test in Step 3, DO NOT modify it in Step 4
+        • NEVER use str_replace_editor on test code after Step 3
+        • If test fails during validation → fix SOURCE CODE in Step 2, NOT the test
+        • Test failure = your implementation is wrong, not the test
+        • Only modify SOURCE CODE files in Step 2, NEVER test files
+        
+        💡 **EFFICIENCY REMINDER: THINK BEFORE YOU ACT**
+        • Before making any tool call, think about what information you need and the most efficient way to get it
+        • Consider if you need multiple pieces of information - can you get them all in one command?
+        • Example: Instead of running separate `ls`, `cat`, and `grep` commands, think about what you actually need and batch operations when possible
+        • Use `grep -rn` or `find` with multiple criteria to reduce the number of tool calls
+        • Read files completely if you're going to analyze them anyway - don't read line-by-line unnecessarily
+    </critical_reminders>
+
+    <tool_usage_reminders>
+        bash:
+        • Use is_test_command=true when running tests to see only failures
+        • Use is_test_command=false to see full test output
+        • Always check file existence before running files
+        • **💡 EFFICIENCY TIP**: Before running a command, think if you need multiple pieces of information - combine them into one efficient command
+        • Use powerful find/grep combinations: `find . -type f -name "*.py" | xargs grep -l "pattern"` to find and search in one command
+        • Use grep with multiple flags: `grep -rn --include="*.py" "pattern"` instead of separate commands
+        • Read complete files in one call rather than multiple line-range reads when analyzing
+        
+        str_replace_editor:
+        • Use "view" command to read files
+        • Use "str_replace" command to make changes
+        • Preserve exact indentation and line breaks using \\n
+        • 🚨 FORBIDDEN in Step 4: NEVER use str_replace_editor on test files during validation
+        • Test code is IMMUTABLE after Step 3 - only edit SOURCE CODE files in Step 2
+        
+        sequential_thinking:
+        • Use for complex analysis and planning
+        • Never embed tool calls inside the "thought" parameter
+        • Set totalThoughts to at least 5 for thorough analysis
+        
+        save_context:
+        • Use after completing each step to save progress
+        • Include step_number, step_name, and summary (required)
+        • Add findings and next_steps for better context
+        • This helps maintain continuity across the workflow
+    </tool_usage_reminders>
+
+    <anti_repetition_guidelines>
+        🚨 CRITICAL: ANTI-REPETITION GUIDELINES 🚨
+        • Keep track of what you've already tried to avoid repeating the same actions
+        • If you've already attempted a solution, try a different approach
+        • If you find yourself repeating the same tool calls, stop and think of a different strategy
+        • Document your progress in your thinking to avoid loops
+        • Use "sequential_thinking" to plan your approach before executing
+        • NEVER repeat the same bash command more than 2 times in a row
+        • If a file doesn't exist, CREATE it first instead of trying to run it repeatedly
+        • REPEATING THE SAME FAILED ACTION WILL CAUSE INFINITE LOOPS
+        
+        💡 **EFFICIENCY**: Before making multiple similar tool calls, stop and think:
+        • Can you combine the operations into fewer, more powerful commands?
+        • Are you gathering related information? Batch them in one efficient command
+        • Think once, act once - plan your approach before executing
+    </anti_repetition_guidelines>
+
+    <restrictions>
+        CRITICAL - No Internet Access:
+        • You CANNOT access the internet or download packages
+        • Do NOT try to install packages with pip, apt, or any package manager
+        • Do NOT try to download files from the internet
+        • Do NOT try to access external services or APIs
+        • Work only with the files and tools available in the local repository
+        • If you need a package that's not available, find an alternative solution or work around it
+        • Do NOT create any documentation files, summary files, README files, or SOLUTION_SUMMARY.md files
+    </restrictions>
+
     """)
     
     MAX_FIX_TASK_STEPS=300
@@ -3088,16 +2980,19 @@ class BugFixSolver(BaseSolver):
             elapsed_time = step_start_time - start_time
             
             resp, tool_name = self.process_response(response, step + 1, elapsed_time)
+            
+            # Minimal logging: just step number
+            logger.info(f"[Step {step + 1}]")
+            
             if tool_name != "complete":
-                step_end_time = time.time()
-                step_duration = step_end_time - step_start_time
-                logger.info(f"Step {step + 1}/{self.MAX_FIX_TASK_STEPS} | Iteration {step + 1} | Time: {elapsed_time:.2f}s")
-                
                 # Include saved context in subsequent LLM calls
                 saved_context = self.tool_manager.get_saved_context()
                 next_prompt = str(resp)
                 if saved_context:
                     next_prompt = f"{saved_context}\n\n{str(resp)}"
+                
+                # Log LLM response (minimal)
+                logger.info(f"[LLM Response]: Step {step + 1} - {tool_name}")
                 
                 response = await self.agent.solve_task(
                     next_prompt, 
@@ -3111,13 +3006,12 @@ class BugFixSolver(BaseSolver):
                     return_type=tuple[str,str]
                 )
             else:
-                logger.info(f"Task completed at step {step + 1} | Total time: {elapsed_time:.2f}s")
+                logger.info(f"[COMPLETE] Total time: {elapsed_time:.2f}s")
                 break
             
         final_patch = Utils.create_final_git_patch(self.tool_manager.temp_files)
-        
         total_time = time.time() - start_time
-        logger.info(f"Generated patch ({len(final_patch)} chars) | Total time: {total_time:.2f}s")
+        logger.info(f"[FINAL] Patch generated ({len(final_patch)} chars) | Total time: {total_time:.2f}s")
         return final_patch
 
 class ProblemTypeClassifier:
