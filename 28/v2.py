@@ -2516,21 +2516,18 @@ class BugFixSolver(BaseSolver):
     <workflow_enforcement>
         **Execute steps sequentially. Each step must be completed before moving to the next:**
         
-        Phase 1: UNDERSTAND (Steps 1-2)
-          - Step 1: Understand problem & explore codebase
-          - Step 2: Analyze test framework & establish baseline
+        Phase 1: UNDERSTAND, PLAN & FIX (Steps 1-2)
+          - Step 1: Understand problem, analyze root cause & plan fix
+          - Step 2: Implement the fix
         Phase 2: CREATE TEST SCRIPT (Steps 3-5)
           - Step 3: Create test file
           - Step 4: VERIFY test completeness (CRITICAL)
           - Step 5: Run test and confirm it fails
-        Phase 3: FIX (Steps 6-7)
-          - Step 6: Analyze root cause & plan fix
-          - Step 7: Implement the fix
-        Phase 4: VALIDATE (Steps 8-11)
-          - Step 8: Fail-to-Pass validation
-          - Step 9: Pass-to-Pass validation
-          - Step 10: Existing functionality validation
-          - Step 11: Final validation & completion
+        Phase 3: VALIDATE (Steps 6-9)
+          - Step 6: Fail-to-Pass validation
+          - Step 7: Pass-to-Pass validation
+          - Step 8: Existing functionality validation
+          - Step 9: Final validation & completion
         
         ⚠️ Do not skip phases. Do not skip steps within phases.
         ⚠️ Step 4 is CRITICAL - never skip test verification.
@@ -2635,7 +2632,6 @@ class BugFixSolver(BaseSolver):
         - Use 'sequential_thinking' for root cause analysis
         - Read existing test files to understand patterns and conventions
         - **Discover and use the project's native test framework** - analyze project structure to find built-in test commands
-        - Run existing test suite FIRST to establish baseline (Step 2)
         - Create new test file within test suite directory
         - Follow exact naming conventions (test_*.py or *_test.py as appropriate)
         - Use same imports, fixtures, and assertion style as existing tests
@@ -2667,14 +2663,14 @@ class BugFixSolver(BaseSolver):
 
     <completion_criteria>
         ✅ **Call 'complete' tool ONLY when ALL criteria are met:**
-        1. Existing test suite was run and baseline established (Step 2) ✓
-        2. New test file was created within test suite (Step 3) ✓
-        3. Test completeness was verified - all scenarios covered (Step 4) ✓
-        4. New test initially failed, confirming it catches the bug (Step 5) ✓
-        5. Code fix was implemented (Step 7) ✓
-        6. New test file now passes (F2P validation - bug is fixed) (Step 8) ✓
-        7. ALL tests pass including new test (P2P validation - no regressions) (Step 9) ✓
-        8. **Existing functionality validation complete** - no regressions in existing tests (Step 10) ✓
+        1. Problem understood, root cause analyzed and fix was planned (Step 1) ✓
+        2. Code fix was implemented (Step 2) ✓
+        3. New test file was created within test suite (Step 3) ✓
+        4. Test completeness was verified - all scenarios covered (Step 4) ✓
+        5. New test initially failed, confirming it catches the bug (Step 5) ✓
+        6. New test file now passes (F2P validation - bug is fixed) (Step 6) ✓
+        7. ALL tests pass including new test (P2P validation - no regressions) (Step 7) ✓
+        8. **Existing functionality validation complete** - no regressions in existing tests (Step 8) ✓
         9. All scenarios in problem statement are addressed ✓
         10. New test file follows existing test conventions and is discoverable ✓
         11. **Current testing system understood** - patterns, frameworks, and organization mapped ✓
@@ -2742,14 +2738,6 @@ class BugFixSolver(BaseSolver):
         Follow the mandatory workflow defined in your system prompt.
     </task>
 
-    <problem_statement>
-    {problem_statement}
-    </problem_statement>
-
-    <available_tools>
-    {available_tools}
-    </available_tools>
-
     <critical_reminders>
         • Start with Step 1 of the mandatory workflow
         • Follow each step in exact order - do not skip any step
@@ -2807,55 +2795,120 @@ class BugFixSolver(BaseSolver):
     <mandatory_workflow>
     **CRITICAL: Follow these steps in EXACT order. Do NOT skip any step.**
 
-    **Step 1: Understand Problem & Explore Codebase**
+    **Step 1: Understand Problem, Analyze Root Cause & Plan Fix**
+    
+    **1.1 Understand the Problem & Explore Codebase**
     - Read problem statement carefully
     - Use `ls`, `find`, `grep` to explore repository structure
     - Find source files related to the problem
     - Read relevant code to understand current implementation
-    - Identify what needs to be fixed
+    - Navigate the project structure and understand architecture (inheritance, imports, etc.) to understand the problem normalized to provide the best solution 
+    
+    **1.2 Analyze Root Cause & Plan the Fix**
+    - Use `sequential_thinking` tool (set totalThoughts: 10-25) for deep analysis
+    - Analyze why the bug is happening (root cause analysis)
+    - Identify all related files that may need to be changed
+    - Brainstorm 5-7 possible solutions
+    - Evaluate each solution's pros and cons
+    - Choose the best fix approach
+    - Create a detailed plan for implementation steps
+    - Document the plan before implementing
 
-    **Step 2: Create Test Script**
-    - Create NEW test file within test directory structure
-    - Follow existing test naming conventions and patterns
-    - Write test cases that cover ALL scenarios in problem statement
-    - Use same imports, structure, and assertion style as existing tests
-    - DO NOT edit existing test files
+    **Step 2: Implement the Fix**
+    - Edit the source code file(s) identified in Step 1
+    - Implement the fix planned in Step 1
+    - Keep changes minimal and focused
+    - Ensure code handles all edge cases
+    - Follow the implementation plan step-by-step
 
-    **Step 3: Verify Test Completeness**
+    **Step 3: Create Test Script with Isolated Testing**
+    
+    **Objective**: Create test scripts that work in isolation, independent of complex dependencies
+    
+    **3.1 When to Use Isolated Tests**
+    - **ALWAYS use isolated tests when**: Existing project tests fail due to missing dependencies
+    - **Use built-in test method when**: Project has working test framework (pytest/unittest)
+    - **If built-in tests fail ONLY due to dependencies**: Switch to isolated approach with mocking
+    
+    **3.2 Create Isolated Test Scripts Using Pytest**
+    
+    **Use pytest's capabilities for isolation:**
+    
+    **3.2.1 Parametrize for Edge Cases**
+    ```python
+    @pytest.mark.parametrize("input,expected", [
+        (1, True),
+        (0, False),
+        (-1, False),
+    ])
+    def test_edge_cases(input, expected):
+        assert function(input) == expected
+    ```
+    
+    **3.2.2 Use Fixtures for Mocks**
+    ```python
+    @pytest.fixture
+    def mock_external_service():
+        return mock.patch('module.external_service')
+    
+    def test_with_mock(mock_external_service):
+        # Your test here
+        pass
+    ```
+    
+    **3.2.3 Use monkeypatch for Environment Values**
+    ```python
+    def test_with_env(monkeypatch):
+        monkeypatch.setenv("SOME_VAR", "value")
+        # Test with environment variable set
+        pass
+    ```
+    
+    **3.2.4 Use capsys for I/O Capture**
+    ```python
+    def test_print_output(capsys):
+        print("Hello")
+        captured = capsys.readouterr()
+        assert captured.out == "Hello\\n"
+    ```
+    
+    **3.3 Create the Test File**
+    - Use `str_replace_editor` to create test files that isolate the issue
+    - Test file names should start with `test_` or end with `_test.py`
+    - **CRITICAL**: Mark test files by naming them with `test_` prefix
+    - Solution files (not starting with `test_`) should be included in final patch
+    
+    **3.4 Validate the Test**
+    - Run the test script to verify it FAILS (reproducing the issue)
+    - Use `bash` tool with `pytest filename.py -v`
+    - Document the failure output for later validation
+    
+    **3.5 Generate Comprehensive Tests**
+    - Cover all aspects of the problem statement
+    - Include edge cases, boundary conditions, error handling
+    - Ensure if these tests pass, the problem is completely solved
+
+    **Step 4: Verify Test Completeness**
     - Use `sequential_thinking` to analyze test completeness
     - Ask: "If ALL these test cases pass, does that GUARANTEE the problem is fixed?"
     - Verify ALL scenarios from problem statement are covered
     - Check ALL edge cases are included
     - Ensure ALL code paths that trigger the bug are tested
 
-    **Step 4: Run Test Script & Confirm Error**
+    **Step 5: Run Test Script & Confirm Error**
     - Understand existing test code pattern and how to configure and run the test from project structure if there is any
     - Create a standalone script to reproduce the error and execute it with `python <filename.py>` using the BashTool, to reproduce the error
     - The script MUST FAIL (proving it catches the bug)
     - Check if the failure matches the problem described and if all are pass the problem is completed fixed
-    - If test passes when it should fail → go back to Step 4
+    - If test passes when it should fail → go back to Step 3
 
-    **Step 6: Analyze Root Cause & Plan Fix**
-    - Use `sequential_thinking` tool (set totalThoughts: 10-25)
-    - Analyze why the bug is happening (root cause)
-    - Analyze all related files (may need to change multiple files)
-    - Brainstorm 5-7 possible solutions
-    - Choose the best fix approach
-    - Plan implementation steps
-
-    **Step 7: Implement the Fix**
-    - Edit the source code file(s) identified in Step 1
-    - Implement the fix planned in Step 6
-    - Keep changes minimal and focused
-    - Ensure code handles all edge cases
-
-    **Step 8: Fail-to-Pass (F2P) Validation**
+    **Step 6: Fail-to-Pass (F2P) Validation**
     - Run your new test script using the same test command as existing tests
     - The new test should now PASS (bug is fixed)
-    - If any test fails → go back to Step 6, refine the fix
-    - Iterate Steps 6→7→8 until all tests pass
+    - If any test fails → go back to Step 2, refine the fix
+    - Iterate Steps 2→6 until all tests pass
 
-    **Step 9: Pass-to-Pass (P2P) Validation**
+    **Step 7: Pass-to-Pass (P2P) Validation**
     - **CRITICAL: Discover the project's native test framework**
     - Analyze project structure: look for management scripts, configuration files, dependency files
     - Check existing test files to identify framework patterns and imports
@@ -2865,9 +2918,9 @@ class BugFixSolver(BaseSolver):
     - Include your new test script in the run
     - ALL tests must pass (existing + your new test)
     - If ANY test fails → analyze why and refine fix
-    - Iterate Steps 6→7→8→9 until ALL tests pass
+    - Iterate Steps 2→6→7 until ALL tests pass
 
-    **Step 10: Existing Functionality Validation**
+    **Step 8: Existing Functionality Validation**
     - Understand current testing system (patterns, frameworks, organization)
     - Identify test dependencies and component relationships
     - Run comprehensive test suite to ensure no regressions
@@ -2875,7 +2928,7 @@ class BugFixSolver(BaseSolver):
     - Check test coverage maintained
     - Ensure environment properly configured
 
-    **Step 11: Final Validation & Completion**
+    **Step 9: Final Validation & Completion**
     - Run full test suite one final time
     - Verify ALL tests passing
     - Review all problem statement requirements → all addressed
@@ -3746,41 +3799,6 @@ class ToolManager:
                 summary=f"Step {step_number} context saved"
             )
 
-    class CompleteTool(LLMTool):
-        """The model should call this tool when it is done with the task."""
-        name = "complete"
-
-        description = "Call this tool when you are done with the task, and supply your answer or summary."
-        input_schema = {
-            "type": "object",
-            "properties": {
-                "answer": {
-                    "type": "string",
-                    "description": "The answer to the question, or final summary of actions taken to accomplish the task.",
-                },
-            },
-            "required": ["answer"],
-        }
-
-        def __init__(
-            self, 
-            tool_manager: Optional[ToolManager] = None,
-        ):
-            super().__init__()
-            self.answer: str = ""
-            self.tool_manager = tool_manager
-
-        def run_impl(
-            self,
-            tool_input: dict[str, Any],
-        ) -> Types.ToolImplOutput:
-            """Handle completion."""
-            self.answer = tool_input["answer"]
-            return Types.ToolImplOutput(
-                tool_output=f"Task completed: {self.answer}",
-                tool_result_message=f"Task completed: {self.answer}",
-            )
-
     class SequentialThinkingTool(LLMTool):
         name = "sequential_thinking"
         description = textwrap.dedent("""
@@ -3938,11 +3956,11 @@ class ToolManager:
             border = "─" * 100
 
             return textwrap.dedent(f"""
-┌{border}
-│ {header}
-├{border}
-│ {thought}
-└{border}
+        ┌{border}
+        │ {header}
+        ├{border}
+        │ {thought}
+        └{border}
             """)
 
         def run_impl(
@@ -4108,9 +4126,17 @@ class ToolManager:
                     self.write_file(_ws_path, file_text)
                     self._file_history[_ws_path].append(file_text)
                     
-                    # Track created file for git patch exclusion
+                    # Only track test files (not solution files) for git patch exclusion
+                    # Test files are identified by: test_ prefix, _test.py suffix, or in test directories
                     if self.tool_manager:
-                        self.tool_manager.add_temp_file(str(_ws_path))
+                        file_name = _ws_path.name
+                        is_test_file = (
+                            file_name.startswith('test_') or 
+                            file_name.endswith('_test.py') or 
+                            'test' in str(_ws_path).lower()
+                        )
+                        if is_test_file:
+                            self.tool_manager.add_temp_file(str(_ws_path))
                     
                     return Types. ToolImplOutput(
                         f"File created successfully at: {_ws_path}",
@@ -4515,6 +4541,41 @@ class ToolManager:
                 + file_content
                 + "\n"
                 + f"Total lines in file: {total_lines}\n"
+            )
+
+    class CompleteTool(LLMTool):
+        """The model should call this tool when it is done with the task."""
+        name = "complete"
+
+        description = "Call this tool when you are done with the task, and supply your answer or summary."
+        input_schema = {
+            "type": "object",
+            "properties": {
+                "answer": {
+                    "type": "string",
+                    "description": "The answer to the question, or final summary of actions taken to accomplish the task.",
+                },
+            },
+            "required": ["answer"],
+        }
+
+        def __init__(
+            self, 
+            tool_manager: Optional[ToolManager] = None,
+        ):
+            super().__init__()
+            self.answer: str = ""
+            self.tool_manager = tool_manager
+
+        def run_impl(
+            self,
+            tool_input: dict[str, Any],
+        ) -> Types.ToolImplOutput:
+            """Handle completion."""
+            self.answer = tool_input["answer"]
+            return Types.ToolImplOutput(
+                tool_output=f"Task completed: {self.answer}",
+                tool_result_message=f"Task completed: {self.answer}",
             )
 
 

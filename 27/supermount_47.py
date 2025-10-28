@@ -302,10 +302,6 @@ PHASE_SPECIFIC_GUIDANCE = {
 FIX_TASK_SYSTEM_PROMPT = textwrap.dedent("""
 # Hey there! You're a Coding Assistant 🚀. I have uploaded all files of a python repository. Your current working directory is at the root of that repo. You will be provided with a problem statement and you need to make the necessary changes to fix the issue.
 
-## Available Tools:
-- You have access to various tools for searching, editing, testing, and managing the codebase
-- **NEW**: `save_context` tool - Use this to save important information (findings, decisions, patterns) that you'll need to reference in future steps. The saved context will be automatically included in all subsequent interactions.
-
 ## Follow these steps to fix the issue:
 1. As a first step, find the relevant files in the repo to work on.
 2. Localise the code causing the issue.
@@ -1589,7 +1585,6 @@ class FixTaskEnhancedToolManager(EnhancedToolManager):
         self.test_runner=test_runner
         self.test_runner_mode=test_runner_mode
         self.generated_test_files=[]
-        self.saved_context = []  # Store context saved by LLM
 
         # Check all classes in the method resolution order (MRO) to include inherited tools
         for cls in self.__class__.__mro__:
@@ -1659,20 +1654,6 @@ class FixTaskEnhancedToolManager(EnhancedToolManager):
             search_term: optional text pattern to filter matching lines
         '''
         return self._get_file_content(file_path,search_start_line,search_end_line,search_term,limit=5000)
-    
-    @EnhancedToolManager.tool
-    def save_context(self, key: str, value: str)->str:
-        '''
-        Save important information for future reference. The saved context will be available in all subsequent interactions.
-        Arguments:
-            key: A descriptive key/name for the information being saved
-            value: The actual information to save for future reference
-        Output:
-            Confirmation that the context was saved
-        '''
-        self.saved_context.append({"key": key, "value": value})
-        logger.info(f"[SAVE_CONTEXT] Saved: {key}")
-        return f"Context saved successfully with key: {key}"
         
     @EnhancedToolManager.tool
     def save_file(self,file_path: str, content: str)->str:
@@ -3694,7 +3675,7 @@ def fix_task_solve_workflow(problem_statement: str, *, timeout: int, run_id_1: s
     strategy_guidance = f"\n\nStrategic Plan: {strategy.get('name', 'Default')} - {strategy.get('description', 'Standard approach')}"
     mcts_guidance = f"\n\nMCTS Recommended Path: {' -> '.join(mcts_path[:5])}" if mcts_path else ""
     
-    cot=EnhancedCOT(latest_observations_to_keep=5)
+    cot=EnhancedCOT(latest_observations_to_keep=30)
     tool_manager=FixTaskEnhancedToolManager(
         available_tools=[
             "get_file_content",
@@ -3707,7 +3688,6 @@ def fix_task_solve_workflow(problem_statement: str, *, timeout: int, run_id_1: s
             "run_code",
             "apply_code_edit",
             "generate_test_function",
-            "save_context",
             "finish"
         ],
         test_runner=test_runner,
@@ -3751,20 +3731,9 @@ def fix_task_solve_workflow(problem_statement: str, *, timeout: int, run_id_1: s
             cot.add_action(EnhancedCOT.Action(next_thought="global timeout reached",next_tool_name="",next_tool_args={},observation="",is_error=True,inference_error_counter={},request_data=[]))
             break
 
-        # Build initial messages
-        user_content = instance_prompt
-        
-        # Add saved context if available
-        if tool_manager.saved_context:
-            context_content = "\n\n=== Saved Context (References for all steps) ===\n"
-            for ctx in tool_manager.saved_context:
-                context_content += f"[{ctx['key']}]: {ctx['value']}\n\n"
-            context_content += "=== End Saved Context ===\n"
-            user_content += context_content
-        
         messages: List[Dict[str, Any]] = [
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_content},
+                {"role": "user", "content": instance_prompt},
             ]
         
         messages.extend(cot.to_str())
